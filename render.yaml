@@ -1,0 +1,34 @@
+# Render blueprint for the AmoraLock backend.
+# In Render: New -> Blueprint -> pick this repo. Then fill the env vars marked
+# sync: false from your own values.
+services:
+  - type: web
+    name: amorachat-api
+    runtime: node
+    rootDir: backend
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGIN
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      # local disk is wiped on redeploy; switch to s3/cloudinary for real media.
+      - key: STORAGE_DRIVER
+        value: local
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false
