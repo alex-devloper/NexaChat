@@ -1,0 +1,32 @@
+# dependencies
+node_modules/
+
+# secrets — never commit real keys
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+!backend/.env.example
+!frontend/.env.example
+
+# build output
+dist/
+build/
+*.tsbuildinfo
+
+# uploaded media (local storage driver)
+backend/uploads/
+
+# logs
+*.log
+npm-debug.log*
+
+# local screenshots / test artifacts
+ui-*.png
+
+# editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
