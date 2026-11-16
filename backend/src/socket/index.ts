@@ -166,6 +166,8 @@ export function initSocket(server: HttpServer) {
     cors: {
       origin: process.env.CORS_ORIGIN
         ? process.env.CORS_ORIGIN.split(",")
+            .map((o) => o.trim().replace(/^["']|["']$/g, "").replace(/\/+$/, ""))
+            .filter(Boolean)
         : true,
       credentials: true,
     },

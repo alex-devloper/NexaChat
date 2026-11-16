@@ -22,7 +22,8 @@ if (process.env.NODE_ENV === "production") {
 
 const allowedOrigins = (process.env.CORS_ORIGIN || "")
   .split(",")
-  .map((origin) => origin.trim())
+  // Tolerate a trailing slash or surrounding quotes pasted from a dashboard.
+  .map((origin) => origin.trim().replace(/^["']|["']$/g, "").replace(/\/+$/, ""))
   .filter(Boolean);
 
 app.use(
