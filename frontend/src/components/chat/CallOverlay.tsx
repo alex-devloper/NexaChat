@@ -274,7 +274,9 @@ export default function CallOverlay({
             void remoteAudioRef.current.play().catch(() => {});
           }
 
-          setStatus("active");
+          // Tracks arrive before the network path is verified; the call only
+          // counts as active once ICE actually connects (see below), otherwise
+          // both sides saw an "active" call with no audio flowing.
         };
 
         pc.onicecandidate = (event) => {
@@ -287,11 +289,20 @@ export default function CallOverlay({
         };
 
         pc.onconnectionstatechange = () => {
-          if (pc.connectionState === "connected") setStatus("active");
+          if (pc.connectionState === "connected") {
+            setStatus("active");
+            // Audio may still be blocked by the browser's autoplay policy.
+            void remoteAudioRef.current?.play().catch(() => {});
+            void remoteVideoRef.current?.play().catch(() => {});
+          }
 
           if (pc.connectionState === "failed") {
             socket.emit("callEnded", { callId });
-            finish("Connection failed. Please try again.");
+            finish(
+              TURN_URL
+                ? "Connection failed. Please try again."
+                : "No audio path: this network needs a TURN relay for calls."
+            );
           }
         };
 

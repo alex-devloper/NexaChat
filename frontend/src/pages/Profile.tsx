@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, API_URL } from "../lib/api";
+import { api, mediaUrl } from "../lib/api";
 import Navbar from "../components/Navbar";
 import AvatarEditor from "../components/profile/AvatarEditor";
 
@@ -174,11 +174,7 @@ export default function Profile() {
           >
             {profilePic ? (
               <img
-                src={
-                  profilePic.startsWith("http")
-                    ? profilePic
-                    : API_URL + profilePic
-                }
+                src={mediaUrl(profilePic)}
                 alt="dp"
                 style={{ width: "100%", height: "100%", objectFit: "cover" }}
               />

@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router-dom";
 
-import { API_URL } from "../lib/api";
+import { mediaUrl } from "../lib/api";
 import { clearSession } from "../lib/session";
 
 type Props = {
@@ -11,11 +11,7 @@ export default function Navbar({ onLogout }: Props) {
   const navigate = useNavigate();
 
   const userData = JSON.parse(sessionStorage.getItem("user") || "{}");
-  const avatar = userData.profilePic
-    ? userData.profilePic.startsWith("http")
-      ? userData.profilePic
-      : API_URL + userData.profilePic
-    : "";
+  const avatar = mediaUrl(userData.profilePic);
 
   const handleLogout = () => {
     onLogout?.();

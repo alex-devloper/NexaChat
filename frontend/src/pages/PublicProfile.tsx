@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, API_URL } from "../lib/api";
+import { api, mediaUrl } from "../lib/api";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { openPhotoViewer } from "../lib/photoViewer";
@@ -86,12 +86,7 @@ export default function PublicProfile() {
             <div
               onClick={() => {
                 if (!user.profilePic) return;
-                openPhotoViewer(
-                  user.profilePic.startsWith("http")
-                    ? user.profilePic
-                    : API_URL + user.profilePic,
-                  user.name
-                );
+                openPhotoViewer(mediaUrl(user.profilePic), user.name);
               }}
               title={user.profilePic ? "View photo" : undefined}
               style={{
@@ -109,11 +104,7 @@ export default function PublicProfile() {
             >
               {user.profilePic ? (
                 <img
-                  src={
-                    user.profilePic.startsWith("http")
-                      ? user.profilePic
-                      : API_URL + user.profilePic
-                  }
+                  src={mediaUrl(user.profilePic)}
                   alt="dp"
                   style={{ width: "100%", height: "100%", objectFit: "cover" }}
                 />

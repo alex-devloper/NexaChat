@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { API_URL } from "../../lib/api";
+import { mediaUrl } from "../../lib/api";
 
 type Props = {
   user: { userId: string; name: string; username?: string; profilePic?: string };
@@ -37,11 +37,7 @@ export default function ChatSettingsSheet({
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
 
-  const avatar = user.profilePic
-    ? user.profilePic.startsWith("http")
-      ? user.profilePic
-      : API_URL + user.profilePic
-    : "";
+  const avatar = mediaUrl(user.profilePic);
 
   const run = async (task: () => Promise<void> | void) => {
     if (busy) return;

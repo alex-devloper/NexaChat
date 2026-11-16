@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import Navbar from "../components/Navbar";
-import { api, API_URL } from "../lib/api";
+import { api, mediaUrl } from "../lib/api";
 import { fileToWallpaper } from "../lib/image";
 import { disablePush, enablePush, pushAlreadyEnabled } from "../lib/push";
 import { resetSettings, useSettings } from "../lib/settings";
@@ -70,11 +70,7 @@ export default function Settings() {
   const [wallpaperBusy, setWallpaperBusy] = useState(false);
   const [wallpaperNote, setWallpaperNote] = useState("");
 
-  const avatar = userData.profilePic
-    ? userData.profilePic.startsWith("http")
-      ? userData.profilePic
-      : API_URL + userData.profilePic
-    : "";
+  const avatar = mediaUrl(userData.profilePic);
 
   useEffect(() => {
     if (!userData?.id) return;

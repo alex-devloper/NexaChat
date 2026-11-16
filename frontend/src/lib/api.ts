@@ -10,6 +10,41 @@ export const API_URL = (
 
 export const api = axios.create({ baseURL: API_URL });
 
+/**
+ * Turns any stored media path into a URL the browser can actually load.
+ * Older records may hold an absolute URL pointing at a dev box or a LAN IP
+ * (e.g. http://192.168.31.188:5000/uploads/a.jpg); those hosts are unreachable
+ * from the deployed site, so the file path is re-pointed at API_URL.
+ */
+export function mediaUrl(value?: string | null): string {
+  if (!value) return "";
+
+  if (!/^https?:\/\//i.test(value)) {
+    return `${API_URL}${value.startsWith("/") ? "" : "/"}${value}`;
+  }
+
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname;
+
+    const isDevHost =
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0" ||
+      /^192\.168\./.test(host) ||
+      /^10\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+
+    if (isDevHost) {
+      return `${API_URL}${parsed.pathname}${parsed.search}`;
+    }
+
+    return value;
+  } catch {
+    return value;
+  }
+}
+
 /** Attach the Bearer token to every request. */
 api.interceptors.request.use((config) => {
   const token =

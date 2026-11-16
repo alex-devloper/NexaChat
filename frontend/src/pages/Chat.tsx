@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { Socket } from "socket.io-client";
-import { api, API_URL } from "../lib/api";
+import { api, mediaUrl } from "../lib/api";
 import { useSocket } from "../lib/socketContext";
 
 import VoiceHoldRecorder from "../components/chat/VoiceHoldRecorder";
@@ -152,12 +152,8 @@ type Msg = {
 
 export default function Chat() {
   const userData = JSON.parse(sessionStorage.getItem("user") || "{}");
-  const BASE_URL = API_URL;
 
-const getFullDP = (dp: string) => {
-  if (!dp) return "";
-  return dp.startsWith("http") ? dp : BASE_URL + dp;
-};
+const getFullDP = (dp: string) => mediaUrl(dp);
   const socketRef = useRef<Socket | null>(null);
   const sharedSocket = useSocket();
 
@@ -1579,11 +1575,7 @@ localStorage.setItem(UNREAD_KEY, JSON.stringify(saved));
 
     if (m.text.startsWith(CONTACT_MARK)) {
       const contact = parseContact(m.text);
-      const pic = contact.profilePic
-        ? contact.profilePic.startsWith("http")
-          ? contact.profilePic
-          : API_URL + contact.profilePic
-        : "";
+      const pic = mediaUrl(contact.profilePic);
 
       return (
         <div className="contact-card">
@@ -1808,11 +1800,7 @@ localStorage.setItem(UNREAD_KEY, JSON.stringify(saved));
                     <div className="chat-avatar suggest-avatar">
                       {sug.profilePic ? (
                         <img
-                          src={
-                            sug.profilePic.startsWith("http")
-                              ? sug.profilePic
-                              : API_URL + sug.profilePic
-                          }
+                          src={mediaUrl(sug.profilePic)}
                           alt=""
                         />
                       ) : (
@@ -1841,12 +1829,7 @@ localStorage.setItem(UNREAD_KEY, JSON.stringify(saved));
                 onClick={(e) => {
                   e.stopPropagation();
                   if (!searchResult.profilePic) return;
-                  openPhotoViewer(
-                    searchResult.profilePic.startsWith("http")
-                      ? searchResult.profilePic
-                      : API_URL + searchResult.profilePic,
-                    searchResult.name
-                  );
+                  openPhotoViewer(mediaUrl(searchResult.profilePic), searchResult.name);
                 }}
                 title={searchResult.profilePic ? "View photo" : undefined}
                 style={{
@@ -1863,11 +1846,7 @@ localStorage.setItem(UNREAD_KEY, JSON.stringify(saved));
               >
                {searchResult.profilePic ? (
   <img
-    src={
-      searchResult.profilePic.startsWith("http")
-        ? searchResult.profilePic
-        : API_URL + searchResult.profilePic
-    }
+    src={mediaUrl(searchResult.profilePic)}
     alt="dp"
     style={{
       width: "100%",
@@ -1926,9 +1905,7 @@ localStorage.setItem(UNREAD_KEY, JSON.stringify(saved));
                           e.stopPropagation();
                           if (chat.profilePic) {
                             openPhotoViewer(
-                              chat.profilePic.startsWith("http")
-                                ? chat.profilePic
-                                : API_URL + chat.profilePic,
+                              mediaUrl(chat.profilePic),
                               chat.name || chat.username || "User"
                             );
                           } else {
@@ -1940,11 +1917,7 @@ localStorage.setItem(UNREAD_KEY, JSON.stringify(saved));
                       >
                         {chat.profilePic ? (
                           <img
-  src={
-    chat.profilePic.startsWith("http")
-      ? chat.profilePic
-      : API_URL + chat.profilePic
-  }
+  src={mediaUrl(chat.profilePic)}
   alt="dp"
   style={{
     width: "100%",
@@ -2017,9 +1990,7 @@ localStorage.setItem(UNREAD_KEY, JSON.stringify(saved));
                   onClick={() => {
                     if (selectedUser.profilePic) {
                       openPhotoViewer(
-                        selectedUser.profilePic.startsWith("http")
-                          ? selectedUser.profilePic
-                          : API_URL + selectedUser.profilePic,
+                        mediaUrl(selectedUser.profilePic),
                         selectedUser.name
                       );
                     } else {
@@ -2033,11 +2004,7 @@ localStorage.setItem(UNREAD_KEY, JSON.stringify(saved));
                 >
                  {selectedUser.profilePic ? (
   <img
-    src={
-      selectedUser.profilePic.startsWith("http")
-        ? selectedUser.profilePic
-        : API_URL + selectedUser.profilePic
-    }
+    src={mediaUrl(selectedUser.profilePic)}
                       alt="dp"
                       style={{
                         width: "100%",

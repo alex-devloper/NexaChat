@@ -7,11 +7,10 @@ import { useSocket } from "../lib/socketContext";
 import { notificationsAllowed } from "../lib/push";
 import { getSettings } from "../lib/settings";
 import { getChatPrefs } from "../lib/chatPrefs";
-import { API_URL } from "../lib/api";
+import { mediaUrl } from "../lib/api";
 
 function fullPic(url?: string) {
-  if (!url) return "";
-  return url.startsWith("http") ? url : API_URL + url;
+  return mediaUrl(url);
 }
 
 function timeLabel() {

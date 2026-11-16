@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { api, API_URL } from "../../lib/api";
+import { api, mediaUrl } from "../../lib/api";
 
 export type SharedContact = {
   userId: string;
@@ -44,11 +44,7 @@ export default function ShareContactModal({
     }
   };
 
-  const avatar = result?.profilePic
-    ? result.profilePic.startsWith("http")
-      ? result.profilePic
-      : API_URL + result.profilePic
-    : "";
+  const avatar = mediaUrl(result?.profilePic);
 
   return (
     <div className="contact-modal-backdrop" onClick={onClose}>
@@ -99,11 +95,7 @@ export default function ShareContactModal({
                 <div className="contact-card-avatar">
                   {person.profilePic ? (
                     <img
-                      src={
-                        person.profilePic.startsWith("http")
-                          ? person.profilePic
-                          : API_URL + person.profilePic
-                      }
+                      src={mediaUrl(person.profilePic)}
                       alt=""
                     />
                   ) : (
