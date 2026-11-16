@@ -30,3 +30,4 @@ ui-*.png
 Thumbs.db
 .vscode/
 .idea/
+render-env.txt
