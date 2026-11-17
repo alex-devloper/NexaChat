@@ -139,6 +139,9 @@ export default function CallOverlay({
           data.answer as RTCSessionDescriptionInit
         );
         await flushIce();
+        // The answer arrived, so the ring is over: show the real state instead
+        // of leaving "Ringing…" on screen while the media path connects.
+        setStatus((current) => (current === "ringing" ? "connecting" : current));
       } catch {
         finish("Could not connect the call");
       }
