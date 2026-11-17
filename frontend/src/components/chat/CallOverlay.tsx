@@ -384,6 +384,14 @@ export default function CallOverlay({
       socket.off("callBusy", handleBusy);
       socket.off("callFailed", handleFailed);
 
+      // Navigating away or reloading mid-call must not leave a ghost call on
+      // the server: it would make the next call report "user is on another
+      // call". Only do this once a peer connection actually existed, so the
+      // StrictMode throwaway mount cannot cancel a real ring.
+      if (pcRef.current && !finishedRef.current) {
+        socket.emit("callEnded", { callId });
+      }
+
       streamRef.current?.getTracks().forEach((track) => track.stop());
       pcRef.current?.close();
       pcRef.current = null;

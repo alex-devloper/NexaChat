@@ -679,15 +679,29 @@ export function initSocket(server: HttpServer) {
           if (activeCalls.has(callId)) return;
 
           // Busy check: don't let a third person overwrite a live call.
-          for (const call of activeCalls.values()) {
-            if (
+          for (const call of Array.from(activeCalls.values())) {
+            const conflicts =
               call.toUserId === toUserId ||
               (call.fromUserId === toUserId && call.answered) ||
-              call.fromUserId === userId
-            ) {
-              socket.emit("callBusy", { callId });
-              return;
+              call.fromUserId === userId;
+
+            if (!conflicts) continue;
+
+            // A call stranded by a closed tab, reload or lost network has no
+            // live socket on one side. Dropping it here keeps "user is on
+            // another call" from sticking after every interrupted call.
+            const [callerSockets, receiverSockets] = await Promise.all([
+              io.in(userRoom(call.fromUserId)).fetchSockets(),
+              io.in(userRoom(call.toUserId)).fetchSockets(),
+            ]);
+
+            if (!callerSockets.length || !receiverSockets.length) {
+              endActiveCall(call, "disconnected");
+              continue;
             }
+
+            socket.emit("callBusy", { callId });
+            return;
           }
 
           const receiver = await User.findById(toUserId).select("_id blocked");
