@@ -83,6 +83,7 @@ export default function CallOverlay({
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
@@ -263,13 +264,27 @@ export default function CallOverlay({
         }
 
         pc.ontrack = (event) => {
-          const stream = event.streams[0] ?? new MediaStream([event.track]);
+          // Audio and video may arrive as separate streams. Merging every track
+          // into one stream keeps the video element from ending up with only
+          // the audio track (that showed up as a black remote video).
+          const stream = remoteStreamRef.current ?? new MediaStream();
+          remoteStreamRef.current = stream;
 
-          if (remoteVideoRef.current) {
+          if (!stream.getTracks().some((track) => track.id === event.track.id)) {
+            stream.addTrack(event.track);
+          }
+
+          if (
+            remoteVideoRef.current &&
+            remoteVideoRef.current.srcObject !== stream
+          ) {
             remoteVideoRef.current.srcObject = stream;
             void remoteVideoRef.current.play().catch(() => {});
           }
-          if (remoteAudioRef.current) {
+          if (
+            remoteAudioRef.current &&
+            remoteAudioRef.current.srcObject !== stream
+          ) {
             remoteAudioRef.current.srcObject = stream;
             void remoteAudioRef.current.play().catch(() => {});
           }
@@ -459,12 +474,21 @@ export default function CallOverlay({
       : message || "Call ended";
 
   return (
-    <div className="call-screen" style={{ justifyContent: "space-between" }}>
+    <div
+      className="call-screen"
+      style={{ justifyContent: "space-between" }}
+      onPointerDown={() => {
+        // Some browsers block remote audio until the page gets a gesture.
+        void remoteAudioRef.current?.play().catch(() => {});
+        void remoteVideoRef.current?.play().catch(() => {});
+      }}
+    >
       {mode === "video" ? (
         <video
           ref={remoteVideoRef}
           autoPlay
           playsInline
+          muted
           style={{
             width: "100%",
             maxWidth: 900,
