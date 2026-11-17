@@ -26,16 +26,26 @@ const TURN_URLS: string[] = TURN_URL.split(",")
   .map((url: string) => url.trim())
   .filter(Boolean);
 
+const TURN_USERNAME = (import.meta.env.VITE_TURN_USERNAME || "").trim();
+const TURN_CREDENTIAL = (import.meta.env.VITE_TURN_CREDENTIAL || "").trim();
+
+// Chrome throws while building the RTCPeerConnection when a turn:/turns: URL
+// has no username/credential. A half-configured TURN (URL set, credentials
+// missing) must therefore be ignored instead of breaking every call.
+const TURN_ENABLED = Boolean(
+  TURN_URLS.length && TURN_USERNAME && TURN_CREDENTIAL
+);
+
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
   { urls: "stun:stun2.l.google.com:19302" },
-  ...(TURN_URLS.length
+  ...(TURN_ENABLED
     ? [
         {
           urls: TURN_URLS,
-          username: import.meta.env.VITE_TURN_USERNAME || undefined,
-          credential: import.meta.env.VITE_TURN_CREDENTIAL || undefined,
+          username: TURN_USERNAME,
+          credential: TURN_CREDENTIAL,
         },
       ]
     : []),
