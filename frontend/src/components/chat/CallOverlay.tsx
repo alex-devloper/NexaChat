@@ -21,14 +21,19 @@ type Status = "ringing" | "connecting" | "active" | "ended";
 // VITE_TURN_* env vars) is required for mobile data and strict NATs.
 const TURN_URL = (import.meta.env.VITE_TURN_URL || "").trim();
 
+/** One env value may list several URLs (UDP, TLS/443, TCP) comma separated. */
+const TURN_URLS: string[] = TURN_URL.split(",")
+  .map((url: string) => url.trim())
+  .filter(Boolean);
+
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
   { urls: "stun:stun2.l.google.com:19302" },
-  ...(TURN_URL
+  ...(TURN_URLS.length
     ? [
         {
-          urls: TURN_URL,
+          urls: TURN_URLS,
           username: import.meta.env.VITE_TURN_USERNAME || undefined,
           credential: import.meta.env.VITE_TURN_CREDENTIAL || undefined,
         },
