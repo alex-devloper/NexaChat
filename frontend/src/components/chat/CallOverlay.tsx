@@ -292,19 +292,22 @@ export default function CallOverlay({
             stream.addTrack(event.track);
           }
 
-          if (
-            remoteVideoRef.current &&
-            remoteVideoRef.current.srcObject !== stream
-          ) {
-            remoteVideoRef.current.srcObject = stream;
-            void remoteVideoRef.current.play().catch(() => {});
+          const video = remoteVideoRef.current;
+          if (video && (event.track.kind === "video" || video.srcObject !== stream)) {
+            // A <video> binds to whatever srcObject it had when it started
+            // playing: when audio arrives first, the video track that lands
+            // later is never rendered and the remote window stays black
+            // while the sound keeps flowing. Rebinding forces it to pick the
+            // picture up.
+            video.srcObject = null;
+            video.srcObject = stream;
+            void video.play().catch(() => {});
           }
-          if (
-            remoteAudioRef.current &&
-            remoteAudioRef.current.srcObject !== stream
-          ) {
-            remoteAudioRef.current.srcObject = stream;
-            void remoteAudioRef.current.play().catch(() => {});
+
+          const audio = remoteAudioRef.current;
+          if (audio && audio.srcObject !== stream) {
+            audio.srcObject = stream;
+            void audio.play().catch(() => {});
           }
 
           // Tracks arrive before the network path is verified; the call only
@@ -454,6 +457,25 @@ export default function CallOverlay({
     return () => window.clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
+
+  // Safety net: if the picture still never renders once the call is active
+  // (video track arrived after the element started playing), re-bind it.
+  useEffect(() => {
+    if (mode !== "video" || status !== "active") return;
+
+    const id = window.setInterval(() => {
+      const video = remoteVideoRef.current;
+      const stream = remoteStreamRef.current;
+      if (!video || !stream || video.videoWidth > 0) return;
+      if (!stream.getVideoTracks().some((t) => t.readyState === "live")) return;
+
+      video.srcObject = null;
+      video.srcObject = stream;
+      void video.play().catch(() => {});
+    }, 1500);
+
+    return () => window.clearInterval(id);
+  }, [mode, status]);
 
   const hangUp = () => {
     if (!finishedRef.current) {
