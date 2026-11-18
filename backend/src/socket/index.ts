@@ -213,6 +213,11 @@ export function initSocket(server: HttpServer) {
     const messageLimiter = createLimiter(30, 10_000);
     const typingLimiter = createLimiter(25, 10_000);
     const callLimiter = createLimiter(40, 60_000);
+    // ICE trickles after the ring: host, then STUN, then TURN/relay
+    // candidates. Sharing the small call budget dropped the relay candidates
+    // on longer calls, so one side ended up with unreachable candidates and
+    // the media path failed.
+    const iceLimiter = createLimiter(400, 60_000);
 
     socket.on("joinUser", async (payload: unknown) => {
       try {
@@ -809,7 +814,7 @@ export function initSocket(server: HttpServer) {
     socket.on(
       "iceCandidate",
       (payload: { callId?: string; candidate?: unknown }) => {
-        if (!callLimiter()) return;
+        if (!iceLimiter()) return;
 
         const call = activeCalls.get(String(payload?.callId || ""));
         if (!call || !payload?.candidate) return;
