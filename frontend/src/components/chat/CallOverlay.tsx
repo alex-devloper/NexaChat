@@ -116,6 +116,11 @@ export default function CallOverlay({
 
   const [status, setStatus] = useState<Status>("preparing");
   const [message, setMessage] = useState("");
+  // Shown under the status when a call fails, so a screenshot says what the
+  // network actually offered instead of us guessing.
+  const [diagnostic, setDiagnostic] = useState("");
+  const localTypesRef = useRef<Set<string>>(new Set());
+  const remoteTypesRef = useRef<Set<string>>(new Set());
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(mode !== "video");
   const [seconds, setSeconds] = useState(0);
@@ -171,9 +176,18 @@ export default function CallOverlay({
 
     pc.ontrack = (event) => attachRemoteTrack(event.track);
 
+    const summarize = () =>
+      `turn:${TURN_READY ? "on" : "off"} local:[${
+        [...localTypesRef.current].join(",") || "-"
+      }] remote:[${[...remoteTypesRef.current].join(",") || "-"}]`;
+
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        const type = event.candidate.type || "host";
+        localTypesRef.current.add(type);
         socket.emit("iceCandidate", { callId, candidate: event.candidate });
+      } else {
+        localTypesRef.current.add("done");
       }
     };
 
@@ -194,6 +208,7 @@ export default function CallOverlay({
           urls: TURN_URLS,
         });
         socket.emit("callEnded", { callId });
+        setDiagnostic(summarize());
         finish(
           TURN_READY
             ? `Call dropped (ICE ${pc.iceConnectionState}). Please try again.`
@@ -236,6 +251,8 @@ export default function CallOverlay({
 
     const onIce = (data: any) => {
       if (!matches(data) || !data?.candidate) return;
+
+      remoteTypesRef.current.add(data.candidate.type || "host");
 
       if (!pc.remoteDescription) {
         pendingIceRef.current.push(data.candidate);
@@ -553,6 +570,11 @@ export default function CallOverlay({
       <div>
         <h2 className="call-name">{peerName}</h2>
         <p className="call-status">{statusText}</p>
+        {diagnostic && (
+          <p className="call-hint" style={{ fontSize: 11, opacity: 0.75 }}>
+            {diagnostic}
+          </p>
+        )}
         <p className="call-hint">{mode === "video" ? "Video call" : "Voice call"}</p>
       </div>
 
