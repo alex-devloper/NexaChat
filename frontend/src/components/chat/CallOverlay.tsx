@@ -17,6 +17,11 @@ type Props = {
 
 type Status = "preparing" | "ringing" | "connecting" | "active" | "ended";
 
+// Bumped whenever the call code changes: both devices showing the same tag
+// proves they are running the same build (a stale cached bundle is otherwise
+// invisible).
+const CALL_BUILD = "call-v3";
+
 const MEDIA_TIMEOUT_MS = 25_000;
 const ACK_TIMEOUT_MS = 8_000;
 const RING_TIMEOUT_MS = 55_000;
@@ -576,6 +581,9 @@ export default function CallOverlay({
           </p>
         )}
         <p className="call-hint">{mode === "video" ? "Video call" : "Voice call"}</p>
+        <p className="call-hint" style={{ fontSize: 10, opacity: 0.45 }}>
+          {CALL_BUILD}
+        </p>
       </div>
 
       <div className="call-actions">
