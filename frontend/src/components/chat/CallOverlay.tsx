@@ -157,8 +157,14 @@ export default function CallOverlay({
         // The answer arrived, so the ring is over: show the real state instead
         // of leaving "Ringing…" on screen while the media path connects.
         setStatus((current) => (current === "ringing" ? "connecting" : current));
-      } catch {
-        finish("Could not connect the call");
+      } catch (err) {
+        // Surface the real reason: "InvalidStateError", "m-line order" and
+        // friends point at very different bugs, and a generic message left
+        // both sides guessing.
+        console.error("call answer failed:", err);
+        finish(
+          `Could not connect the call · ${(err as Error)?.message || "sdp"}`
+        );
       }
     };
 
@@ -333,10 +339,16 @@ export default function CallOverlay({
           }
 
           if (pc.connectionState === "failed") {
+            console.error("call connection failed:", {
+              ice: pc.iceConnectionState,
+              gathering: pc.iceGatheringState,
+              turn: TURN_ENABLED,
+              urls: TURN_URLS,
+            });
             socket.emit("callEnded", { callId });
             finish(
-              TURN_URL
-                ? "Connection failed. Please try again."
+              TURN_ENABLED
+                ? `Connection failed (ICE ${pc.iceConnectionState}). Please try again.`
                 : "No audio path: this network needs a TURN relay for calls."
             );
           }
