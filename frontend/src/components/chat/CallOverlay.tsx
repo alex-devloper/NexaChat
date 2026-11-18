@@ -15,32 +15,35 @@ type Props = {
   onClose: () => void;
 };
 
-type Status = "ringing" | "connecting" | "active" | "ended";
+type Status = "preparing" | "ringing" | "connecting" | "active" | "ended";
 
-// STUN alone only works on simple networks. A TURN relay (set the
-// VITE_TURN_* env vars) is required for mobile data and strict NATs.
-const TURN_URL = (import.meta.env.VITE_TURN_URL || "").trim();
+const MEDIA_TIMEOUT_MS = 25_000;
+const ACK_TIMEOUT_MS = 8_000;
+const RING_TIMEOUT_MS = 55_000;
 
-/** One env value may list several URLs (UDP, TLS/443, TCP) comma separated. */
-const TURN_URLS: string[] = TURN_URL.split(",")
+/* ------------------------------------------------------------------ */
+/* ICE servers                                                         */
+/* ------------------------------------------------------------------ */
+
+const TURN_URLS = String(import.meta.env.VITE_TURN_URL || "")
+  .split(",")
   .map((url: string) => url.trim())
   .filter(Boolean);
 
-const TURN_USERNAME = (import.meta.env.VITE_TURN_USERNAME || "").trim();
-const TURN_CREDENTIAL = (import.meta.env.VITE_TURN_CREDENTIAL || "").trim();
+const TURN_USERNAME = String(import.meta.env.VITE_TURN_USERNAME || "").trim();
+const TURN_CREDENTIAL = String(
+  import.meta.env.VITE_TURN_CREDENTIAL || ""
+).trim();
 
-// Chrome throws while building the RTCPeerConnection when a turn:/turns: URL
-// has no username/credential. A half-configured TURN (URL set, credentials
-// missing) must therefore be ignored instead of breaking every call.
-const TURN_ENABLED = Boolean(
+// A turn:/turns: server without credentials makes RTCPeerConnection throw, so
+// a half-configured relay is ignored instead of breaking every call.
+const TURN_READY = Boolean(
   TURN_URLS.length && TURN_USERNAME && TURN_CREDENTIAL
 );
 
 const ICE_SERVERS: RTCIceServer[] = [
-  { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:stun1.l.google.com:19302" },
-  { urls: "stun:stun2.l.google.com:19302" },
-  ...(TURN_ENABLED
+  { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+  ...(TURN_READY
     ? [
         {
           urls: TURN_URLS,
@@ -51,7 +54,19 @@ const ICE_SERVERS: RTCIceServer[] = [
     : []),
 ];
 
-const MEDIA_TIMEOUT_MS = 20_000;
+/* ------------------------------------------------------------------ */
+/* Helpers                                                             */
+/* ------------------------------------------------------------------ */
+
+/** getUserMedia can hang on an unanswered permission prompt. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_resolve, reject) =>
+      window.setTimeout(() => reject(new Error("media-timeout")), ms)
+    ),
+  ]);
+}
 
 const formatDuration = (total: number) => {
   const m = Math.floor(total / 60);
@@ -74,15 +89,9 @@ const reasonText = (reason?: string) => {
   }
 };
 
-/** getUserMedia can hang on a pending permission prompt; never wait forever. */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_resolve, reject) =>
-      window.setTimeout(() => reject(new Error("media-timeout")), ms)
-    ),
-  ]);
-}
+/* ------------------------------------------------------------------ */
+/* Component                                                           */
+/* ------------------------------------------------------------------ */
 
 export default function CallOverlay({
   socket,
@@ -98,39 +107,102 @@ export default function CallOverlay({
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
-  const remoteStreamRef = useRef<MediaStream | null>(null);
-  const pcRef = useRef<RTCPeerConnection | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
-  const finishedRef = useRef(false);
 
-  const [status, setStatus] = useState<Status>(
-    direction === "outgoing" ? "ringing" : "connecting"
-  );
-  // True once the server confirmed the call actually left this device.
-  const [serverAck, setServerAck] = useState(direction === "incoming");
-  const [message, setMessage] = useState<string | null>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+  const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
+  const endedRef = useRef(false);
+
+  const [status, setStatus] = useState<Status>("preparing");
+  const [message, setMessage] = useState("");
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(mode !== "video");
   const [seconds, setSeconds] = useState(0);
 
+  /** Show a final line, then close the overlay. Runs at most once. */
   const finish = (text: string) => {
-    if (finishedRef.current) return;
-    finishedRef.current = true;
+    if (endedRef.current) return;
+    endedRef.current = true;
     setMessage(text);
     setStatus("ended");
-    window.setTimeout(() => onClose(), 1800);
+    window.setTimeout(() => onClose(), 2200);
   };
 
   useEffect(() => {
     let cancelled = false;
 
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    pcRef.current = pc;
+
+    // One stream for everything the peer sends: audio and video arrive as
+    // separate tracks, and a <video> only renders tracks present in the
+    // stream it is bound to.
+    const remoteStream = new MediaStream();
+    remoteStreamRef.current = remoteStream;
+
     const matches = (data: any) => String(data?.callId || "") === callId;
 
-    const flushIce = async () => {
-      const pc = pcRef.current;
-      if (!pc) return;
+    const playRemote = () => {
+      void remoteVideoRef.current?.play().catch(() => {});
+      void remoteAudioRef.current?.play().catch(() => {});
+    };
 
+    const attachRemoteTrack = (track: MediaStreamTrack) => {
+      if (!remoteStream.getTracks().some((t) => t.id === track.id)) {
+        remoteStream.addTrack(track);
+      }
+
+      const video = remoteVideoRef.current;
+      if (video && (track.kind === "video" || video.srcObject !== remoteStream)) {
+        // Rebinding makes the element pick up a video track that arrived
+        // after it already started playing the audio track.
+        video.srcObject = null;
+        video.srcObject = remoteStream;
+      }
+
+      const audio = remoteAudioRef.current;
+      if (audio && audio.srcObject !== remoteStream) {
+        audio.srcObject = remoteStream;
+      }
+
+      playRemote();
+    };
+
+    pc.ontrack = (event) => attachRemoteTrack(event.track);
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        socket.emit("iceCandidate", { callId, candidate: event.candidate });
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      const state = pc.connectionState;
+
+      if (state === "connected") {
+        setStatus((current) => (current === "ended" ? current : "active"));
+        playRemote();
+        return;
+      }
+
+      if (state === "failed") {
+        console.error("call media path failed", {
+          ice: pc.iceConnectionState,
+          gathering: pc.iceGatheringState,
+          turn: TURN_READY,
+          urls: TURN_URLS,
+        });
+        socket.emit("callEnded", { callId });
+        finish(
+          TURN_READY
+            ? `Call dropped (ICE ${pc.iceConnectionState}). Please try again.`
+            : "Call dropped: this network needs a TURN relay."
+        );
+      }
+    };
+
+    const flushIce = async () => {
       const pending = pendingIceRef.current;
       pendingIceRef.current = [];
 
@@ -143,97 +215,87 @@ export default function CallOverlay({
       }
     };
 
-    const handleAnswered = async (data: any) => {
-      if (direction !== "outgoing" || !matches(data)) return;
+    const onRinging = (data: any) => {
+      if (!matches(data)) return;
+      setStatus((current) => (current === "preparing" ? "ringing" : current));
+    };
 
-      const pc = pcRef.current;
-      if (!pc) return;
+    const onAnswered = async (data: any) => {
+      if (direction !== "outgoing" || !matches(data) || !data?.answer) return;
 
       try {
-        await pc.setRemoteDescription(
-          data.answer as RTCSessionDescriptionInit
-        );
+        await pc.setRemoteDescription(data.answer);
         await flushIce();
-        // The answer arrived, so the ring is over: show the real state instead
-        // of leaving "Ringing…" on screen while the media path connects.
-        setStatus((current) => (current === "ringing" ? "connecting" : current));
+        setStatus((current) => (current === "ended" ? current : "connecting"));
       } catch (err) {
-        // Surface the real reason: "InvalidStateError", "m-line order" and
-        // friends point at very different bugs, and a generic message left
-        // both sides guessing.
-        console.error("call answer failed:", err);
-        finish(
-          `Could not connect the call · ${(err as Error)?.message || "sdp"}`
-        );
+        console.error("could not apply the answer", err);
+        socket.emit("callEnded", { callId });
+        finish("Call could not connect. Please try again.");
       }
     };
 
-    const handleIce = async (data: any) => {
-      if (!matches(data)) return;
+    const onIce = (data: any) => {
+      if (!matches(data) || !data?.candidate) return;
 
-      const pc = pcRef.current;
-      if (!pc || !pc.remoteDescription) {
+      if (!pc.remoteDescription) {
         pendingIceRef.current.push(data.candidate);
         return;
       }
 
-      try {
-        await pc.addIceCandidate(data.candidate);
-      } catch {
-        /* ignore */
-      }
+      void pc.addIceCandidate(data.candidate).catch(() => {});
     };
 
-    const handleRejected = (data: any) => {
+    const onRejected = (data: any) => {
       if (!matches(data)) return;
       finish(
         data?.reason === "no-answer"
           ? `${peerName} did not answer`
-          : `${peerName} ${reasonText(data?.reason).toLowerCase()}`
+          : reasonText(data?.reason).toLowerCase().startsWith("call")
+          ? `${peerName} ${reasonText(data?.reason).toLowerCase()}`
+          : reasonText(data?.reason)
       );
     };
 
-    const handleEnded = (data: any) => {
+    const onEnded = (data: any) => {
       if (!matches(data)) return;
       finish(reasonText(data?.reason));
     };
 
-    const handleRinging = (data: any) => {
-      if (!matches(data)) return;
-      setServerAck(true);
+    const onBusy = (data: any) => {
+      if (matches(data)) finish("User is on another call");
     };
 
-    const handleBusy = (data: any) => {
-      if (!matches(data)) return;
-      finish("User is on another call");
+    const onFailed = (data: any) => {
+      if (matches(data)) finish(data?.reason || "Call failed");
     };
 
-    const handleFailed = (data: any) => {
-      if (!matches(data)) return;
-      finish(data?.reason || "Could not start the call");
-    };
+    socket.on("callRinging", onRinging);
+    socket.on("callAnswered", onAnswered);
+    socket.on("iceCandidate", onIce);
+    socket.on("callRejected", onRejected);
+    socket.on("callEnded", onEnded);
+    socket.on("callBusy", onBusy);
+    socket.on("callFailed", onFailed);
 
-    socket.on("callAnswered", handleAnswered);
-    socket.on("iceCandidate", handleIce);
-    socket.on("callRejected", handleRejected);
-    socket.on("callEnded", handleEnded);
-    socket.on("callRinging", handleRinging);
-    socket.on("callBusy", handleBusy);
-    socket.on("callFailed", handleFailed);
-
-    /** Ask for the mic/camera and swap the tracks into the live call. */
-    const attachLocalMedia = async (pc: RTCPeerConnection) => {
+    const start = async () => {
       try {
         if (!navigator.mediaDevices?.getUserMedia) {
-          throw new Error("no-media-api");
+          throw new DOMException("Media API missing", "NotSupportedError");
         }
 
+        // Media first, negotiation second: both sides already own their
+        // tracks when the offer/answer is built, so the SDP advertises the
+        // real audio/video from the start (no renegotiation, no black sides).
         const stream = await withTimeout(
           navigator.mediaDevices.getUserMedia({
-            audio: true,
+            audio: { echoCancellation: true, noiseSuppression: true },
             video:
               mode === "video"
-                ? { width: { ideal: 1280 }, height: { ideal: 720 } }
+                ? {
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 },
+                    facingMode: "user",
+                  }
                 : false,
           }),
           MEDIA_TIMEOUT_MS
@@ -244,115 +306,16 @@ export default function CallOverlay({
           return;
         }
 
-        streamRef.current = stream;
+        localStreamRef.current = stream;
 
         if (localVideoRef.current && mode === "video") {
           localVideoRef.current.srcObject = stream;
+          void localVideoRef.current.play().catch(() => {});
         }
 
-        // The offer already carried sendrecv transceivers, so swapping the
-        // tracks in needs no new negotiation.
-        for (const transceiver of pc.getTransceivers()) {
-          const kind = transceiver.receiver.track.kind;
-          const track = stream.getTracks().find((t) => t.kind === kind);
-          if (track) {
-            await transceiver.sender.replaceTrack(track).catch(() => {});
-          }
+        for (const track of stream.getTracks()) {
+          pc.addTrack(track, stream);
         }
-      } catch (err) {
-        const reason = (err as Error)?.message;
-
-        socket.emit("callEnded", { callId });
-
-        finish(
-          reason === "media-timeout"
-            ? "Mic/camera permission pending — allow it and call again"
-            : reason === "no-media-api"
-            ? "This browser cannot access mic/camera"
-            : "Mic/camera permission is required for calls"
-        );
-      }
-    };
-
-    const start = async () => {
-      try {
-        const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-        pcRef.current = pc;
-
-        // Transceivers exist before any permission prompt, so the ring can go
-        // out immediately (this was the reason calls never reached the other
-        // person when the mic prompt was slow or blocked).
-        pc.addTransceiver("audio", { direction: "sendrecv" });
-        if (mode === "video") {
-          pc.addTransceiver("video", { direction: "sendrecv" });
-        }
-
-        pc.ontrack = (event) => {
-          // Audio and video may arrive as separate streams. Merging every track
-          // into one stream keeps the video element from ending up with only
-          // the audio track (that showed up as a black remote video).
-          const stream = remoteStreamRef.current ?? new MediaStream();
-          remoteStreamRef.current = stream;
-
-          if (!stream.getTracks().some((track) => track.id === event.track.id)) {
-            stream.addTrack(event.track);
-          }
-
-          const video = remoteVideoRef.current;
-          if (video && (event.track.kind === "video" || video.srcObject !== stream)) {
-            // A <video> binds to whatever srcObject it had when it started
-            // playing: when audio arrives first, the video track that lands
-            // later is never rendered and the remote window stays black
-            // while the sound keeps flowing. Rebinding forces it to pick the
-            // picture up.
-            video.srcObject = null;
-            video.srcObject = stream;
-            void video.play().catch(() => {});
-          }
-
-          const audio = remoteAudioRef.current;
-          if (audio && audio.srcObject !== stream) {
-            audio.srcObject = stream;
-            void audio.play().catch(() => {});
-          }
-
-          // Tracks arrive before the network path is verified; the call only
-          // counts as active once ICE actually connects (see below), otherwise
-          // both sides saw an "active" call with no audio flowing.
-        };
-
-        pc.onicecandidate = (event) => {
-          if (event.candidate) {
-            socket.emit("iceCandidate", {
-              callId,
-              candidate: event.candidate,
-            });
-          }
-        };
-
-        pc.onconnectionstatechange = () => {
-          if (pc.connectionState === "connected") {
-            setStatus("active");
-            // Audio may still be blocked by the browser's autoplay policy.
-            void remoteAudioRef.current?.play().catch(() => {});
-            void remoteVideoRef.current?.play().catch(() => {});
-          }
-
-          if (pc.connectionState === "failed") {
-            console.error("call connection failed:", {
-              ice: pc.iceConnectionState,
-              gathering: pc.iceGatheringState,
-              turn: TURN_ENABLED,
-              urls: TURN_URLS,
-            });
-            socket.emit("callEnded", { callId });
-            finish(
-              TURN_ENABLED
-                ? `Connection failed (ICE ${pc.iceConnectionState}). Please try again.`
-                : "No audio path: this network needs a TURN relay for calls."
-            );
-          }
-        };
 
         if (direction === "outgoing") {
           const offer = await pc.createOffer();
@@ -364,9 +327,6 @@ export default function CallOverlay({
             callType: mode,
             offer,
           });
-
-          // Ring is away: permission can be granted in the background.
-          void attachLocalMedia(pc);
         } else {
           if (!incomingOffer) throw new Error("Missing offer");
 
@@ -378,11 +338,10 @@ export default function CallOverlay({
 
           socket.emit("callAnswer", { callId, answer });
           setStatus("connecting");
-
-          void attachLocalMedia(pc);
         }
       } catch (err) {
-        const name = (err as DOMException)?.name;
+        const error = err as DOMException;
+        console.error("call could not start", err);
 
         if (direction === "outgoing") {
           socket.emit("callEnded", { callId });
@@ -391,87 +350,92 @@ export default function CallOverlay({
         }
 
         finish(
-          name === "NotAllowedError"
-            ? "Camera/microphone permission denied"
-            : name === "NotFoundError"
+          error?.name === "NotAllowedError"
+            ? "Camera and microphone permission is required"
+            : error?.name === "NotFoundError"
             ? "No camera or microphone found"
+            : error?.message === "media-timeout"
+            ? "Camera permission was not answered"
             : "Could not start the call"
         );
       }
     };
 
-    // React StrictMode runs setup → cleanup → setup in development. Starting
-    // on a microtask means only the surviving setup places the call, so the
-    // throwaway first mount cannot cancel it.
+    // React StrictMode mounts twice in development: the throwaway mount is
+    // cancelled before this microtask runs, so only the live call is placed.
     void Promise.resolve().then(() => {
       if (!cancelled) void start();
     });
 
     return () => {
       cancelled = true;
-      socket.off("callAnswered", handleAnswered);
-      socket.off("iceCandidate", handleIce);
-      socket.off("callRejected", handleRejected);
-      socket.off("callEnded", handleEnded);
-      socket.off("callRinging", handleRinging);
-      socket.off("callBusy", handleBusy);
-      socket.off("callFailed", handleFailed);
 
-      // Navigating away or reloading mid-call must not leave a ghost call on
-      // the server: it would make the next call report "user is on another
-      // call". Only do this once a peer connection actually existed, so the
-      // StrictMode throwaway mount cannot cancel a real ring.
-      if (pcRef.current && !finishedRef.current) {
-        socket.emit("callEnded", { callId });
-      }
+      socket.off("callRinging", onRinging);
+      socket.off("callAnswered", onAnswered);
+      socket.off("iceCandidate", onIce);
+      socket.off("callRejected", onRejected);
+      socket.off("callEnded", onEnded);
+      socket.off("callBusy", onBusy);
+      socket.off("callFailed", onFailed);
 
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      pcRef.current?.close();
-      pcRef.current = null;
+      // Never leave a ghost call behind: the server keeps the ring alive until
+      // it is told otherwise.
+      if (!endedRef.current) socket.emit("callEnded", { callId });
+
+      localStreamRef.current?.getTracks().forEach((track) => track.stop());
+      localStreamRef.current = null;
+      remoteStream.getTracks().forEach((track) => track.stop());
+
+      pc.ontrack = null;
+      pc.onicecandidate = null;
+      pc.onconnectionstatechange = null;
+      pc.close();
+
+      if (pcRef.current === pc) pcRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [callId]);
 
-  // Call duration timer.
+  /* Call duration */
   useEffect(() => {
     if (status !== "active") return;
     const id = window.setInterval(() => setSeconds((s) => s + 1), 1000);
     return () => window.clearInterval(id);
   }, [status]);
 
-  // No server acknowledgement: the call never actually left this device.
+  /* Safety nets */
   useEffect(() => {
-    if (direction !== "outgoing" || serverAck || status === "ended") return;
+    if (status === "ended") return;
+
+    if (direction === "incoming") return;
+
+    if (status === "preparing" || status === "ringing") {
+      // The caller must hear something back from the server, otherwise the
+      // call never left this device (offline, expired session, …).
+      const id = window.setTimeout(() => {
+        if (endedRef.current || status !== "preparing") return;
+        socket.emit("callEnded", { callId });
+        finish("Could not reach the server. Check your connection.");
+      }, ACK_TIMEOUT_MS);
+      return () => window.clearTimeout(id);
+    }
+  }, [direction, status, socket, callId]);
+
+  useEffect(() => {
+    if (direction !== "outgoing" || status === "active" || status === "ended") {
+      return;
+    }
 
     const id = window.setTimeout(() => {
-      if (finishedRef.current) return;
-      socket.emit("callEnded", { callId });
-      finish(
-        "Server se connect nahi ho paya. Internet check karke dobara try karo."
-      );
-    }, 8000);
-
-    return () => window.clearTimeout(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [direction, serverAck, status]);
-
-  // Safety net: never leave the caller stuck if the ring is lost.
-  useEffect(() => {
-    if (direction !== "outgoing" || status === "ended") return;
-
-    const id = window.setTimeout(() => {
-      if (finishedRef.current || status === "active") return;
-
+      if (endedRef.current) return;
       socket.emit("callEnded", { callId });
       finish("No answer");
-    }, 55_000);
+    }, RING_TIMEOUT_MS);
 
     return () => window.clearTimeout(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status]);
+  }, [direction, status, socket, callId]);
 
-  // Safety net: if the picture still never renders once the call is active
-  // (video track arrived after the element started playing), re-bind it.
+  /* Some browsers keep a remote <video> black until playback is retried. */
   useEffect(() => {
     if (mode !== "video" || status !== "active") return;
 
@@ -484,49 +448,41 @@ export default function CallOverlay({
       video.srcObject = null;
       video.srcObject = stream;
       void video.play().catch(() => {});
-    }, 1500);
+    }, 2000);
 
     return () => window.clearInterval(id);
   }, [mode, status]);
 
+  /* Controls */
   const hangUp = () => {
-    if (!finishedRef.current) {
-      socket.emit("callEnded", { callId });
-    }
-    finishedRef.current = true;
-
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    pcRef.current?.close();
-    pcRef.current = null;
-
+    if (!endedRef.current) socket.emit("callEnded", { callId });
+    endedRef.current = true;
     onClose();
   };
 
   const toggleMute = () => {
-    const stream = streamRef.current;
-    if (!stream) return;
     const next = !muted;
-    stream.getAudioTracks().forEach((track) => {
+    localStreamRef.current?.getAudioTracks().forEach((track) => {
       track.enabled = !next;
     });
     setMuted(next);
   };
 
   const toggleCamera = () => {
-    const stream = streamRef.current;
-    if (!stream) return;
     const next = !cameraOff;
-    stream.getVideoTracks().forEach((track) => {
+    localStreamRef.current?.getVideoTracks().forEach((track) => {
       track.enabled = !next;
     });
     setCameraOff(next);
   };
 
   const statusText =
-    status === "ringing"
-      ? serverAck
-        ? "Ringing…"
-        : "Calling…"
+    status === "preparing"
+      ? direction === "outgoing"
+        ? "Calling…"
+        : "Starting camera…"
+      : status === "ringing"
+      ? "Calling…"
       : status === "connecting"
       ? "Connecting…"
       : status === "active"
@@ -538,7 +494,7 @@ export default function CallOverlay({
       className="call-screen"
       style={{ justifyContent: "space-between" }}
       onPointerDown={() => {
-        // Some browsers block remote audio until the page gets a gesture.
+        // Remote playback can stay blocked until the page gets a gesture.
         void remoteAudioRef.current?.play().catch(() => {});
         void remoteVideoRef.current?.play().catch(() => {});
       }}
@@ -597,9 +553,7 @@ export default function CallOverlay({
       <div>
         <h2 className="call-name">{peerName}</h2>
         <p className="call-status">{statusText}</p>
-        <p className="call-hint">
-          {mode === "video" ? "Video call" : "Voice call"}
-        </p>
+        <p className="call-hint">{mode === "video" ? "Video call" : "Voice call"}</p>
       </div>
 
       <div className="call-actions">
@@ -623,7 +577,7 @@ export default function CallOverlay({
               title={cameraOff ? "Camera on" : "Camera off"}
               style={{ background: cameraOff ? "#ff3b30" : "#2a3942" }}
             >
-              {cameraOff ? "📷" : "🎥"}
+              {cameraOff ? "📵" : "📹"}
             </button>
             <div className="call-btn-label">
               {cameraOff ? "Camera on" : "Camera off"}
@@ -633,9 +587,10 @@ export default function CallOverlay({
 
         <div>
           <button
-            className="call-btn call-btn-decline"
+            className="call-btn"
             onClick={hangUp}
             title="End call"
+            style={{ background: "#ff3b30" }}
           >
             📴
           </button>
