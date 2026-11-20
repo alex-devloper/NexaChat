@@ -20,7 +20,7 @@ type Status = "preparing" | "ringing" | "connecting" | "active" | "ended";
 // Bumped whenever the call code changes: both devices showing the same tag
 // proves they are running the same build (a stale cached bundle is otherwise
 // invisible).
-const CALL_BUILD = "call-v3";
+const CALL_BUILD = "call-v4";
 
 const MEDIA_TIMEOUT_MS = 25_000;
 const ACK_TIMEOUT_MS = 8_000;
@@ -30,10 +30,38 @@ const RING_TIMEOUT_MS = 55_000;
 /* ICE servers                                                         */
 /* ------------------------------------------------------------------ */
 
-const TURN_URLS = String(import.meta.env.VITE_TURN_URL || "")
+const CONFIGURED_TURN_URLS = String(import.meta.env.VITE_TURN_URL || "")
   .split(",")
   .map((url: string) => url.trim())
   .filter(Boolean);
+
+/**
+ * A relay configured with only one transport leaves the call with no path at
+ * all when a network blocks that transport (UDP is blocked on many mobile and
+ * campus networks, TCP 80 on some proxies). Every transport offered by the
+ * same relay host is added, so the browser can fall back by itself.
+ */
+function expandTurnUrls(configured: string[]): string[] {
+  const urls = new Set(configured);
+  const hosts = new Set<string>();
+
+  for (const url of configured) {
+    const match = /^turns?:([^:?/]+)/i.exec(url);
+    if (match && match[1]) hosts.add(match[1]);
+  }
+
+  for (const host of hosts) {
+    urls.add(`turn:${host}:80`);
+    urls.add(`turn:${host}:443`);
+    urls.add(`turn:${host}:80?transport=tcp`);
+    urls.add(`turn:${host}:443?transport=tcp`);
+    urls.add(`turns:${host}:443`);
+  }
+
+  return [...urls];
+}
+
+const TURN_URLS = expandTurnUrls(CONFIGURED_TURN_URLS);
 
 const TURN_USERNAME = String(import.meta.env.VITE_TURN_USERNAME || "").trim();
 const TURN_CREDENTIAL = String(
